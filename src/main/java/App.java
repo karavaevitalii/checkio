@@ -9,15 +9,16 @@ import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 public class App {
     private static final String BASE_URL = "https://stepik.org/api/";
+    private static final int THREADS_NUM = 10;
 
-    private final List<Course> courses = new ArrayList<>();
+    private static List<Course> courses = new CopyOnWriteArrayList<>();
 
     private final StepikPageLoader stepikPageLoader;
     private final int N;
@@ -29,45 +30,35 @@ public class App {
     }
 
     private void exec() {
-        final StepikResponsePage[] responsePage = new StepikResponsePage[1];
-        final boolean[] hasNext = {true};
-        int page = 1;
-        do {
-            stepikPageLoader.loadPage(page).enqueue(new Callback<>() {
-                @Override
-                public void onResponse(Call<StepikResponsePage> call,
-                                       Response<StepikResponsePage> response) {
-                    responsePage[0] = response.body();
-                    if (responsePage[0] == null) {
-                        hasNext[0] = false;
-                        return;
-                    }
+        ExecutorService pool = Executors.newFixedThreadPool(THREADS_NUM);
+        for (int i = 0; i < THREADS_NUM; i++) {
+            pool.submit(new Task(stepikPageLoader, pool));
+        }
 
-                    if (!responsePage[0].hasNextPage())
-                        hasNext[0] = false;
+        try {
+            pool.awaitTermination(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            pool.shutdown();
+            Thread.currentThread().interrupt();
+        }
 
-                    synchronized (courses) {
-                        courses.addAll(responsePage[0].getCourses());
-                    }
-                }
-
-                @Override
-                public void onFailure(Call<StepikResponsePage> call, Throwable t) {
-                    System.err.println("Something went wrong: " + t.toString());
-                    System.exit(1);
-                }
-            });
-
-            ++page;
-        } while (hasNext[0]);
-
-        final List<Course> popular = courses
+        courses = courses
                 .stream()
                 .sorted(Comparator.comparing(course -> -course.getLearnersCount()))
                 .limit(N)
                 .collect(Collectors.toList());
-        for (Course course : popular) {
+        for (Course course : courses) {
             System.out.println(course.getTitle() + '\t' + course.getLearnersCount());
+        }
+
+        pool.shutdown();
+        try {
+            if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
+                pool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            pool.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -79,6 +70,42 @@ public class App {
                 .build();
 
         return retrofit.create(StepikPageLoader.class);
+    }
+
+    private static class Task implements Runnable {
+        final static AtomicInteger page = new AtomicInteger();
+
+        final ExecutorService pool;
+        final StepikPageLoader stepikPageLoader;
+
+        Task(StepikPageLoader stepikPageLoader, ExecutorService pool) {
+            this.stepikPageLoader = stepikPageLoader;
+            this.pool = pool;
+        }
+
+        @Override
+        public void run() {
+            stepikPageLoader.loadPage(page.incrementAndGet()).enqueue(new Callback<>() {
+                @Override
+                public void onResponse(Call<StepikResponsePage> call,
+                                       Response<StepikResponsePage> response) {
+                    final StepikResponsePage responsePage = response.body();
+                    if (responsePage != null) {
+                        courses.addAll(responsePage.getCourses());
+
+
+                        if (responsePage.hasNextPage())
+                            pool.submit(new Task(stepikPageLoader, pool));
+                    }
+                }
+
+                @Override
+                public void onFailure(Call<StepikResponsePage> call, Throwable t) {
+                    System.err.println("Something wrong happened: " + t.toString());
+                    System.exit(1);
+                }
+            });
+        }
     }
 
     public static void main(String[] args) {

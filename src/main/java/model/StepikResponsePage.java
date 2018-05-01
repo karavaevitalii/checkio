@@ -18,4 +18,8 @@ public class StepikResponsePage {
     public boolean hasNextPage() {
         return meta.hasNext();
     }
+
+    public int getPage() {
+        return meta.getPage();
+    }
 }

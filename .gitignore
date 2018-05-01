@@ -15,4 +15,4 @@ gradle-app.setting
 *.tar.gz
 *.rar
 hs_err_pid*
-test/
+test/*
