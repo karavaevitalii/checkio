@@ -18,7 +18,6 @@ public class App {
     private final ExecutorService loaders = Executors.newFixedThreadPool(THREADS_NUM);
     private final Phaser phaser = new Phaser();
     private final AtomicInteger page = new AtomicInteger();
-    private final AtomicBoolean hasNextPage = new AtomicBoolean(true);
 
     private final List<Course> courses = new CopyOnWriteArrayList<>();
 
@@ -63,9 +62,8 @@ public class App {
                         .body();
                 if (response != null) {
                     courses.addAll(response.getCourses());
-                    if (hasNextPage.compareAndSet(true, response.hasNextPage()))
-                        if (response.hasNextPage())
-                            loaders.submit(new Loader());
+                    if (response.hasNextPage())
+                        loaders.submit(new Loader());
                 }
             } catch (IOException e) {
                 System.err.println("Something wrong happened while talking to server: " +
