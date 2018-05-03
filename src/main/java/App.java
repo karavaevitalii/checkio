@@ -3,18 +3,16 @@ import com.google.gson.GsonBuilder;
 import model.Course;
 import model.StepikPageLoader;
 import model.StepikResponsePage;
-import retrofit2.Call;
-import retrofit2.Callback;
-import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 
 public class App {
     private static final String BASE_URL = "https://stepik.org/api/";
-    private static final int THREADS_NUM = 8;
+    private static final int THREADS_NUM = 16;
 
     private final List<Course> courses = new CopyOnWriteArrayList<>();
 
@@ -43,9 +41,7 @@ public class App {
         courses.stream()
                 .sorted((c1, c2) -> c2.getLearnersCount() - c1.getLearnersCount())
                 .limit(N)
-                .forEach(c -> System.out.printf("%-40s%d%n", c.getTitle(), c.getLearnersCount()));
-
-        System.exit(0);
+                .forEach(c -> System.out.printf("%-50s%d%n", c.getTitle(), c.getLearnersCount()));
     }
 
     private StepikPageLoader createPageLoader() {
@@ -67,28 +63,26 @@ public class App {
 
         @Override
         public void run() {
-            final boolean[] hasNext = {true};
+            boolean hasNext;
             do {
-                stepikPageLoader.loadPage(page).enqueue(new Callback<>() {
-                    @Override
-                    public void onResponse(Call<StepikResponsePage> call,
-                                           Response<StepikResponsePage> response) {
-                        final StepikResponsePage responsePage = response.body();
-                        if (responsePage != null) {
-                            courses.addAll(responsePage.getCourses());
-                            hasNext[0] = responsePage.hasNextPage();
-                        } else
-                            hasNext[0] = false;
-                    }
-
-                    @Override
-                    public void onFailure(Call<StepikResponsePage> call, Throwable t) {
-                        System.err.println("Something wrong happened: " + t.toString());
-                    }
-                });
+                try {
+                    final StepikResponsePage response = stepikPageLoader
+                            .loadPage(page)
+                            .execute()
+                            .body();
+                    if (response != null) {
+                        courses.addAll(response.getCourses());
+                        hasNext = response.hasNextPage();
+                    } else
+                        hasNext = false;
+                } catch (IOException e) {
+                    System.err.println("Some problem occurred while talking to the server: " +
+                            e.getMessage());
+                    hasNext = true;
+                }
 
                 page += THREADS_NUM;
-            } while (hasNext[0]);
+            } while (hasNext);
         }
     }
 

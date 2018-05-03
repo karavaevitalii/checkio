@@ -16,6 +16,15 @@ public class StepikResponsePage {
     }
 
     public boolean hasNextPage() {
-        return meta.hasNext();
+        return meta.has_next;
     }
+
+    private class Meta {
+        final boolean has_next;
+
+        Meta(boolean has_next) {
+            this.has_next = has_next;
+        }
+    }
+
 }
