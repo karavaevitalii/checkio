@@ -9,10 +9,16 @@ import retrofit2.converter.gson.GsonConverterFactory;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class App {
     private static final String BASE_URL = "https://stepik.org/api/";
     private static final int THREADS_NUM = 16;
+    private final ExecutorService loaders = Executors.newFixedThreadPool(THREADS_NUM);
+    private final Phaser phaser = new Phaser();
+    private final AtomicInteger page = new AtomicInteger();
+    private final AtomicBoolean hasNextPage = new AtomicBoolean(true);
 
     private final List<Course> courses = new CopyOnWriteArrayList<>();
 
@@ -25,23 +31,15 @@ public class App {
     }
 
     private void exec() {
-        ExecutorService pool = Executors.newFixedThreadPool(THREADS_NUM);
-        for (int i = 1; i <= THREADS_NUM; i++)
-            pool.submit(new Loader(i));
-
-        pool.shutdown();
-        try {
-            if (!pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
-                pool.shutdownNow();
-        } catch (InterruptedException e) {
-            pool.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        for (int i = 0; i < THREADS_NUM; i++)
+            loaders.submit(new Loader());
+        phaser.arriveAndAwaitAdvance();
+        loaders.shutdown();
 
         courses.stream()
                 .sorted((c1, c2) -> c2.getLearnersCount() - c1.getLearnersCount())
                 .limit(N)
-                .forEach(c -> System.out.printf("%-50s%d%n", c.getTitle(), c.getLearnersCount()));
+                .forEach(c -> System.out.printf("%-75s%d%n", c.getTitle(), c.getLearnersCount()));
     }
 
     private StepikPageLoader createPageLoader() {
@@ -55,34 +53,26 @@ public class App {
     }
 
     private class Loader implements Runnable {
-        int page;
-
-        Loader(int page) {
-            this.page = page;
-        }
-
         @Override
         public void run() {
-            boolean hasNext;
-            do {
-                try {
-                    final StepikResponsePage response = stepikPageLoader
-                            .loadPage(page)
-                            .execute()
-                            .body();
-                    if (response != null) {
-                        courses.addAll(response.getCourses());
-                        hasNext = response.hasNextPage();
-                    } else
-                        hasNext = false;
-                } catch (IOException e) {
-                    System.err.println("Some problem occurred while talking to the server: " +
-                            e.getMessage());
-                    hasNext = true;
+            phaser.register();
+            try {
+                StepikResponsePage response = stepikPageLoader
+                        .loadPage(page.incrementAndGet())
+                        .execute()
+                        .body();
+                if (response != null) {
+                    courses.addAll(response.getCourses());
+                    if (hasNextPage.compareAndSet(true, response.hasNextPage()))
+                        if (response.hasNextPage())
+                            loaders.submit(new Loader());
                 }
-
-                page += THREADS_NUM;
-            } while (hasNext);
+            } catch (IOException e) {
+                System.err.println("Something wrong happened while talking to server: " +
+                        e.getMessage());
+            } finally {
+                phaser.arrive();
+            }
         }
     }
 
